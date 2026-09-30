@@ -1,0 +1,65 @@
+import sounddevice as sd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+# --- CONFIGURATION ---
+CHUNK = 2048             # Number of audio samples per frame
+RATE = 48000             # 48 kHz (Matches your ESP32 exact output)
+
+# --- SETUP SOUNDDEVICE (Hardware Interface) ---
+# This opens the microphone stream instantly without PyAudio
+stream = sd.InputStream(samplerate=RATE, channels=1, dtype='int16')
+stream.start()
+
+# --- SETUP MATPLOTLIB (The UI) ---
+# Create a window with 2 rows (Top: Waveform, Bottom: Frequencies)
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 6))
+fig.patch.set_facecolor('#0a0e17') # Dark background
+
+# 1. Oscilloscope (Waveform) Plot
+x_waveform = np.arange(0, CHUNK)
+line_waveform, = ax1.plot(x_waveform, np.zeros(CHUNK), color='#00e676') # Sonar green
+ax1.set_ylim(-32768, 32767) # 16-bit audio limits
+ax1.set_xlim(0, CHUNK)
+ax1.set_title("Live Oscilloscope (Time Domain)", color='white')
+ax1.set_facecolor('black')
+ax1.axis('off') # Hide numbers for a cleaner "radar" look
+
+# 2. Spectrum Analyzer (Fast Fourier Transform - FFT) Plot
+x_fft = np.linspace(0, RATE / 2, CHUNK // 2)
+line_fft, = ax2.plot(x_fft, np.zeros(CHUNK // 2), color='#64ffda') # Cyan
+ax2.set_xlim(0, 10000) # Show frequencies up to 10 kHz
+ax2.set_ylim(0, 10000) # Adjust this if your signal looks too tall/short
+ax2.set_title("Live Spectrum Analyzer (Frequency Domain)", color='white')
+ax2.set_xlabel("Frequency (Hertz)", color='white')
+ax2.set_facecolor('black')
+ax2.tick_params(colors='white')
+
+# --- THE REAL-TIME ENGINE ---
+def animate(i):
+    # 1. Read the physical electrical signal from the microphone jack
+    data, overflowed = stream.read(CHUNK)
+    data_np = data[:, 0] # Extract the mono channel
+    
+    # 2. Update the Oscilloscope screen
+    line_waveform.set_ydata(data_np)
+    
+    # 3. Calculate the complex FFT Math to find the frequencies
+    fft_data = np.abs(np.fft.fft(data_np)) * 2 / CHUNK
+    fft_data = fft_data[0:CHUNK // 2] # Keep only positive frequencies
+    
+    # 4. Update the Spectrum Analyzer screen
+    line_fft.set_ydata(fft_data)
+    
+    return line_waveform, line_fft
+
+# Run the animation at high speed
+ani = animation.FuncAnimation(fig, animate, interval=10, blit=True)
+
+plt.tight_layout()
+plt.show()
+
+# Cleanup when you close the window
+stream.stop()
+stream.close()
