@@ -1,0 +1,137 @@
+#include <driver/i2s.h>
+#include <math.h>
+
+// --- Configuration Constants ---
+#define I2S_NUM I2S_NUM_0         // Use I2S port 0
+#define SAMPLE_RATE 48000         // 48 kHz (Safe for laptop audio cards)
+#define BUFFER_SIZE 1024          // Number of samples per ping
+#define TURBIDITY_PIN 32          // ADC1 pin for the Turbidity dial
+#define BUTTON_PIN 4              // Push-button for switching modes
+
+// The DMA hardware requires 16-bit words for the internal 8-bit DAC
+uint16_t waveBuffer[BUFFER_SIZE];
+int currentMode = 0;              // 0 = LFM, 1 = Geometric, 2 = Barker-13
+
+// The mathematically perfect Barker-13 sequence
+int barker13[13] = {1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1, -1, 1};
+
+// --- STEP 1: Hardware I2S DMA Setup ---
+void setupI2S() {
+  i2s_config_t i2s_config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN),
+    .sample_rate = SAMPLE_RATE,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT, 
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .intr_alloc_flags = 0,
+    .dma_buf_count = 8,
+    .dma_buf_len = 64,
+    .use_apll = false
+  };
+  
+  // Install the driver into the ESP32 hardware and route to internal DAC
+  i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL); 
+  i2s_set_pin(I2S_NUM, NULL); 
+  i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN); 
+}
+
+// --- MODE 0: The standard LFM Chirp (Normal Mode) ---
+void generateLFMChirp(float startFreq, float endFreq) {
+  float duration = (float)BUFFER_SIZE / SAMPLE_RATE;
+  float k = (endFreq - startFreq) / duration;
+  
+  for(int i = 0; i < BUFFER_SIZE; i++) {
+    float t = (float)i / SAMPLE_RATE;
+    float phase = 2.0 * PI * (startFreq * t + 0.5 * k * t * t);
+    
+    uint8_t sample8bit = (uint8_t)(127.5 * sin(phase) + 127.5);
+    waveBuffer[i] = ((uint16_t)sample8bit) << 8; 
+  }
+}
+
+// --- MODE 1: The Geometric Sweep (High-Speed / Doppler-Tolerant Mode) ---
+void generateGeometricSweep(float startFreq, float endFreq) {
+  float duration = (float)BUFFER_SIZE / SAMPLE_RATE;
+  
+  for(int i = 0; i < BUFFER_SIZE; i++) {
+    float t = (float)i / SAMPLE_RATE;
+    float phase = 2.0 * PI * startFreq * duration * ((pow((endFreq/startFreq), (t/duration)) - 1.0) / log(endFreq/startFreq));
+    
+    uint8_t sample8bit = (uint8_t)(127.5 * sin(phase) + 127.5);
+    waveBuffer[i] = ((uint16_t)sample8bit) << 8;
+  }
+}
+
+// --- MODE 2: The Phase-Coded Pulse (Heavy Clutter / Noise-Canceling Mode) ---
+void generateBarker13(float centerFreq) {
+  float duration = (float)BUFFER_SIZE / SAMPLE_RATE;
+  float timePerChip = duration / 13.0; 
+  
+  for(int i = 0; i < BUFFER_SIZE; i++) {
+    float t = (float)i / SAMPLE_RATE;
+    int currentChip = (int)(t / timePerChip);
+    if (currentChip > 12) currentChip = 12; 
+    
+    float wave = sin(2.0 * PI * centerFreq * t) * barker13[currentChip];
+    
+    uint8_t sample8bit = (uint8_t)(127.5 * wave + 127.5);
+    waveBuffer[i] = ((uint16_t)sample8bit) << 8;
+  }
+}
+
+// --- STEP 2: Setup Loop ---
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Starting AdaptPing Multi-Mode MVP...");
+  
+  // Setup the button pin with an internal pull-up resistor
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  
+  // Initialize the DMA and DAC
+  setupI2S();
+}
+
+// --- STEP 3: Main Execution Loop (Runs once per Ping) ---
+void loop() {
+  // SENSE: Check if the user pressed the mode button
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    currentMode++;
+    if (currentMode > 2) currentMode = 0;
+    delay(300); // Simple debounce so the button doesn't double-click
+  }
+
+  // Read the Turbidity dial to find our Environmental Index
+  float envIndex = analogRead(TURBIDITY_PIN) / 4095.0; 
+  float currentStartFreq = 3000.0 - (2000.0 * envIndex); 
+  float currentEndFreq = 5000.0 - (3000.0 * envIndex);
+  float centerFreq = (currentStartFreq + currentEndFreq) / 2.0;
+
+  // DECIDE & SYNTHESIZE: Which mode are we in?
+  if (currentMode == 0) {
+    generateLFMChirp(currentStartFreq, currentEndFreq);
+    Serial.print("Mode: LFM Chirp | ");
+  } 
+  else if (currentMode == 1) {
+    generateGeometricSweep(currentStartFreq, currentEndFreq);
+    Serial.print("Mode: Geometric Sweep | ");
+  } 
+  else if (currentMode == 2) {
+    generateBarker13(centerFreq);
+    Serial.print("Mode: Barker-13 | ");
+  }
+
+  // Print telemetry for the serial monitor / dashboard
+  Serial.print("Index S: ");
+  Serial.print(envIndex);
+  Serial.print(" | Start Freq: ");
+  Serial.print(currentStartFreq);
+  Serial.print(" | End Freq: ");
+  Serial.println(currentEndFreq);
+
+  // TRANSMIT: Hand the buffer over to the DMA hardware. 
+  size_t bytes_written;
+  i2s_write(I2S_NUM, waveBuffer, sizeof(waveBuffer), &bytes_written, portMAX_DELAY); 
+  
+  // Wait 200ms before sending the next ping (5 Hz Pulse Repetition Frequency)
+  delay(200); 
+}
