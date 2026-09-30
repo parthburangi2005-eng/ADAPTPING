@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AdaptPing AUV Sonar Dashboard</title>
+    <style>
+        body {
+            background-color: #0a0e17; /* Deep ocean dark blue */
+            color: #64ffda; /* Sonar green/cyan */
+            font-family: 'Courier New', Courier, monospace;
+            text-align: center;
+            margin: 0;
+            padding: 30px;
+        }
+        h1 {
+            color: #00e676;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 20px;
+        }
+        .status-indicator {
+            color: #8892b0;
+            font-size: 1.2em;
+            margin-bottom: 40px;
+        }
+        .grid {
+            display: flex;
+            justify-content: center;
+            gap: 25px;
+            flex-wrap: wrap;
+        }
+        .card {
+            background: #112240;
+            border: 1px solid #233554;
+            border-radius: 8px;
+            padding: 25px;
+            width: 260px;
+            box-shadow: 0 4px 15px rgba(0, 230, 118, 0.05);
+            transition: transform 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: #64ffda;
+        }
+        .value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #00e676;
+            margin: 15px 0;
+        }
+        .label {
+            font-size: 1.1em;
+            color: #8892b0;
+            text-transform: uppercase;
+        }
+        .mode-text {
+            font-size: 1.5em;
+            color: #ffb74d; /* Warning orange for active modes */
+        }
+        .btn {
+            background: transparent;
+            color: #64ffda;
+            border: 2px solid #64ffda;
+            padding: 12px 24px;
+            font-size: 1.1em;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 40px;
+            font-family: 'Courier New', Courier, monospace;
+            text-transform: uppercase;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        .btn:hover {
+            background: rgba(100, 255, 218, 0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>AdaptPing Payload Telemetry</h1>
+    <div class="status-indicator">Link Status: <span id="link-status" style="color: #ff5252;">WAITING FOR ESP32...</span></div>
+
+    <div class="grid">
+        <!-- Environmental Index Card -->
+        <div class="card">
+            <div class="label">Environmental Index (S)</div>
+            <div class="value" id="env-index">0.00</div>
+            <div class="label" id="env-text" style="color: #00e676;">Clear Water</div>
+        </div>
+
+        <!-- Waveform Mode Card -->
+        <div class="card">
+            <div class="label">Active Modulation</div>
+            <div class="value mode-text" id="active-mode">LFM CHIRP</div>
+            <div class="label" style="font-size: 0.9em;">(Normal Mode)</div>
+        </div>
+
+        <!-- Frequency Range Card -->
+        <div class="card">
+            <div class="label">Sweep Bandwidth</div>
+            <div class="value">
+                <span id="start-freq">3000</span> - <span id="end-freq">5000</span>
+            </div>
+            <div class="label">Hertz (Hz)</div>
+        </div>
+    </div>
+
+    <!-- This button lets you test the UI right now before building the hardware -->
+    <button class="btn" onclick="runSimulation()">Run Jury Simulation Test</button>
+
+    <script>
+        // --- REAL HARDWARE FETCH (Uncomment this section when your ESP32 is ready) ---
+        /*
+        setInterval(function() {
+            fetch('http://192.168.4.1/data') // The default IP address of the ESP32 Access Point
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('link-status').innerText = 'CONNECTED';
+                document.getElementById('link-status').style.color = '#00e676';
+                updateDashboard(data.envIndex, data.startFreq, data.endFreq, data.mode);
+            })
+            .catch(error => {
+                console.error('Error fetching ESP32 data:', error);
+            });
+        }, 500); // Check for new data every half-second
+        */
+
+        // --- SIMULATION FUNCTION (For testing right now) ---
+        let simMode = 0;
+        function runSimulation() {
+            document.getElementById('link-status').innerText = 'SIMULATION ACTIVE';
+            document.getElementById('link-status').style.color = '#ffb74d';
+
+            // Generate a random Turbidity value like the real sensor would
+            let fakeEnvIndex = (Math.random() * 1.0).toFixed(2);
+            
+            // Calculate frequencies exactly like your ESP32 C++ code does
+            let fakeStart = Math.floor(3000 - (2000 * fakeEnvIndex));
+            let fakeEnd = Math.floor(5000 - (3000 * fakeEnvIndex));
+            
+            // Cycle through the 3 modes just like pushing the physical button
+            simMode++;
+            if(simMode > 2) simMode = 0;
+
+            updateDashboard(fakeEnvIndex, fakeStart, fakeEnd, simMode);
+        }
+
+        // --- CORE UI UPDATE FUNCTION ---
+        function updateDashboard(envIndex, startFreq, endFreq, modeNumber) {
+            // Update Index and Water Quality Text
+            document.getElementById('env-index').innerText = envIndex;
+            let envText = document.getElementById('env-text');
+            if (envIndex < 0.4) {
+                envText.innerText = "Clear Water";
+                envText.style.color = "#00e676"; // Green
+            } else if (envIndex < 0.7) {
+                envText.innerText = "Moderate Turbidity";
+                envText.style.color = "#ffb74d"; // Orange
+            } else {
+                envText.innerText = "Heavy Mud / Deep";
+                envText.style.color = "#ff5252"; // Red
+            }
+
+            // Update Frequencies
+            document.getElementById('start-freq').innerText = startFreq;
+            document.getElementById('end-freq').innerText = endFreq;
+
+            // Update Waveform Mode Text
+            let modeDisplay = document.getElementById('active-mode');
+            if (modeNumber == 0) {
+                modeDisplay.innerText = "LFM CHIRP";
+            } else if (modeNumber == 1) {
+                modeDisplay.innerText = "GEOMETRIC SWEEP";
+            } else if (modeNumber == 2) {
+                modeDisplay.innerText = "BARKER-13 CODE";
+            }
+        }
+    </script>
+</body>
+</html>
